@@ -216,7 +216,7 @@
         <surefire.skipSecondPart>true</surefire.skipSecondPart>
       </properties>
     </profile>
-    <profile>
+    <!--<profile>
       <id>build-with-jdk11</id>
       <activation>
         <jdk>[1.11,)</jdk>
@@ -227,7 +227,7 @@
           <artifactId>javax.annotation-api</artifactId>
         </dependency>
       </dependencies>
-    </profile>
+    </profile>-->
     <profile>
       <id>eclipse-specific</id>
       <activation>

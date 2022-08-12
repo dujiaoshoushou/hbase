@@ -85,7 +85,7 @@ public abstract class ZKNodeTracker extends ZKListener {
     } catch (KeeperException e) {
       abortable.abort("Unexpected exception during initialization, aborting", e);
     }
-    postStart();
+    postStart(); // 主要监听备份HMaster节点。
   }
 
   /**

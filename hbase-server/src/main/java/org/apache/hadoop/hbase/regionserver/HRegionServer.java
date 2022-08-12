@@ -482,8 +482,10 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     try (Scope ignored = span.makeCurrent()) {
       this.dataFsOk = true;
       this.masterless = !clusterMode();
+      // 检查在 Memstore 和 Block 缓存部分之后是否有足够的堆内存。
+      // 我们需要为其他 RS 函数留出至少 20% 的堆。
       MemorySizeUtil.checkForClusterFreeHeapMemoryLimit(this.conf);
-      HFile.checkHFileVersion(this.conf);
+      HFile.checkHFileVersion(this.conf); // 检测hFile的版本
       checkCodecs(this.conf);
       FSUtils.setupShortCircuitRead(this.conf);
 
@@ -504,11 +506,11 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         HConstants.DEFAULT_HBASE_RPC_SHORTOPERATION_RETRY_PAUSE_TIME);
 
       regionServerAccounting = new RegionServerAccounting(conf);
+      // TODO : 三级缓存的作用
+      blockCache = BlockCacheFactory.createBlockCache(conf); // 创建block 缓存，
+      mobFileCache = new MobFileCache(conf); // 创建MobFileCache
 
-      blockCache = BlockCacheFactory.createBlockCache(conf);
-      mobFileCache = new MobFileCache(conf);
-
-      rsSnapshotVerifier = new RSSnapshotVerifier(conf);
+      rsSnapshotVerifier = new RSSnapshotVerifier(conf); // region server 快照验证
 
       uncaughtExceptionHandler =
         (t, e) -> abort("Uncaught exception in executorService thread " + t.getName(), e);
@@ -520,7 +522,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       } else {
         masterAddressTracker = null;
       }
-      this.rpcServices.start(zooKeeper);
+      this.rpcServices.start(zooKeeper); // 启动region server RPC服务。
       span.setStatus(StatusCode.OK);
     } catch (Throwable t) {
       // Make sure we log the exception. HRegionServer is often started via reflection and the
@@ -659,11 +661,11 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
   private void preRegistrationInitialization() {
     final Span span = TraceUtil.createSpan("HRegionServer.preRegistrationInitialization");
     try (Scope ignored = span.makeCurrent()) {
-      initializeZooKeeper();
-      setupClusterConnection();
+      initializeZooKeeper(); // 初始化zk
+      setupClusterConnection(); // 设置集群连接
       bootstrapNodeManager = new BootstrapNodeManager(asyncClusterConnection, masterAddressTracker);
-      regionReplicationBufferManager = new RegionReplicationBufferManager(this);
-      // Setup RPC client for master communication
+      regionReplicationBufferManager = new RegionReplicationBufferManager(this); // 创建wal是缓存区。
+      // Setup RPC client for master communication，设置rpc客户端连接master
       this.rpcClient = asyncClusterConnection.getRpcClient();
       span.setStatus(StatusCode.OK);
     } catch (Throwable t) {
@@ -694,10 +696,12 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     // Create the master address tracker, register with zk, and start it. Then
     // block until a master is available. No point in starting up if no master
     // running.
+    // 创建master跟踪器，注册到zk，并启动，阻塞直到master可用。
     blockAndCheckIfStopped(this.masterAddressTracker);
 
     // Wait on cluster being up. Master will set this flag up in zookeeper
     // when ready.
+    // 等待集群起来，master在zk上打了标记，并准备好了。
     blockAndCheckIfStopped(this.clusterStatusTracker);
 
     // If we are HMaster then the cluster id should have already been set.
@@ -706,6 +710,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       // Since cluster status is now up
       // ID should have already been set by HMaster
       try {
+        // 通过zk获取集群id
         clusterId = ZKClusterId.readClusterIdZNode(this.zooKeeper);
         if (clusterId == null) {
           this.abort("Cluster ID has not been set");
@@ -721,6 +726,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     }
 
     // watch for snapshots and other procedures
+    // 创建region server的 程序管理器。
     try {
       rspmHost = new RegionServerProcedureManagerHost();
       rspmHost.loadProcedures(conf);
@@ -764,6 +770,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     }
     try {
       // Do pre-registration initializations; zookeeper, lease threads, etc.
+      // 向master注册前，完成所有组件的初始化
       preRegistrationInitialization();
     } catch (Throwable e) {
       abort("Fatal exception during initialization", e);
@@ -774,6 +781,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         installShutdownHook();
         // Initialize the RegionServerCoprocessorHost now that our ephemeral
         // node was created, in case any coprocessors want to use ZooKeeper
+        // 创建RegionServerCoprocessorHost
         this.rsHost = new RegionServerCoprocessorHost(this, this.conf);
 
         // Try and register with the Master; tell it we are here. Break if server is stopped or
@@ -786,12 +794,47 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
             new RetryCounterFactory(Integer.MAX_VALUE, this.sleeper.getPeriod(), 1000 * 60 * 5);
           RetryCounter rc = rcf.create();
           while (keepLooping()) {
-            RegionServerStartupResponse w = reportForDuty();
+            /**
+             * 向master进行注册,并得到master的响应,如果注册失败一直等待,直到注册成功
+             *
+             * 通过masterAddressManager在zk中拿到master的注册地址,
+             *
+             * 创建rs与master通信的rpc连接,
+             *
+             * (master实现接口)RegionServerStatusProtos.RegionServerStatusService.BlockingInterface
+             *
+             * (rs接口实现类)RegionServerStatusProtos.RegionServerStatusService.BlockingStub
+             *
+             * 生成向master请求的request(当前rs的端口,启动时间(startcode),当前时间)
+             *
+             * 通过rpc的client端实现BlockingStub调用regionServerStartup向master注册rs节点
+             *
+             * master与rs通信请查看master与rs注册与心跳分析
+             * */
+            RegionServerStartupResponse w = reportForDuty(); // 向master节点报告当前regionserver节点已经启动并向master节点注册信息。
             if (w == null) {
               long sleepTime = rc.getBackoffTimeAndIncrementAttempts();
               LOG.warn("reportForDuty failed; sleeping {} ms and then retrying.", sleepTime);
               this.sleeper.sleep(sleepTime);
             } else {
+              // TODO : 这里是重点，regionserver 启动并向master节点报告后，初始化后续任务。
+              /**
+               * 向master注册成功后,向zk中的rs路径注册此rs节点,
+               *
+               * 注册的节点为zk的EPHEMERAL类型的节点,超时时间通过zookeeper.session.timeout配置,默认为180000
+               *
+               * EPHEMERAL注册的zk节点,只要rs中的session挂掉,数据就自动删除,
+               *
+               * zksession中会有一个线程定期与zk进行ping
+               *
+               * master向rs响应的response有一个map实例，此实例中的响应conf会更新rs中原来的conf中具体key对应的值
+               *
+               * 更新mapred.task.id配置为hb_rs_servername
+               *
+               * 生成FileSystem/Hlog实例,设置rs为online
+               *
+               * 调用startService 方法 ，启动相关线程,
+               */
               handleReportForDutyResponse(w);
               break;
             }
@@ -850,7 +893,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         }
         long now = EnvironmentEdgeManager.currentTime();
         if ((now - lastMsg) >= msgInterval) {
-          tryRegionServerReport(lastMsg, now);
+          tryRegionServerReport(lastMsg, now); // 定时向master节点报告当前regionserver的信息。
           lastMsg = EnvironmentEdgeManager.currentTime();
         }
         if (!isStopped() && !isAborted()) {
@@ -1334,11 +1377,27 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
   /**
    * Run init. Sets up wal and starts up all server threads.
    * @param c Extra configuration.
+   * 向master注册成功,向zk中的rs路径注册此rs节点,
+   *
+   * 注册的节点为zk的EPHEMERAL类型的节点,超时时间通过zookeeper.session.timeout配置,默认为180000
+   *
+   * EPHEMERAL注册的zk节点,只要rs中的session挂掉,数据就自动删除,
+   *
+   * zksession中会有一个线程定期与zk进行ping
+   *
+   * master向rs响应的response有一个map实例，此实例中的响应conf会更新rs中原来的conf中具体key对应的值
+   *
+   * 更新mapred.task.id配置为hb_rs_servername
+   *
+   * 生成FileSystem/Hlog实例,设置rs为online
+   *
+   * 调用startService方法，启动相关线程
    */
   protected void handleReportForDutyResponse(final RegionServerStartupResponse c)
     throws IOException {
     try {
       boolean updateRootDir = false;
+      // 一开始的for循环是为了将HMaster端返回的部分信息添加到当前的conf成员变量中
       for (NameStringPair e : c.getMapEntriesList()) {
         String key = e.getName();
         // The hostname the master sees us as.
@@ -1379,6 +1438,8 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         this.conf.set(key, value);
       }
       // Set our ephemeral znode up in zookeeper now we have a name.
+      // 将当前RegionServer的节点信息写入ZK中，路径为/hbase/rs/~。
+
       createMyEphemeralNode();
 
       if (updateRootDir) {
@@ -1393,9 +1454,11 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       }
 
       // Save it in a file, this will allow to see if we crash
+      // 然后调用ZNodeClearer.writeMyEphemeralNodeOnDisk将信息本地化
       ZNodeClearer.writeMyEphemeralNodeOnDisk(getMyEphemeralNodePath());
 
       // This call sets up an initialized replication and WAL. Later we start it up.
+      // 主要做了两件事情，其一是构造WALFactory，另外一个就是调用createNewReplicationInstance。
       setupWALAndReplication();
       // Init in here rather than in constructor after thread name has been set
       final MetricsTable metricsTable =
@@ -1758,7 +1821,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       initializeThreads();
     }
     this.secureBulkLoadManager = new SecureBulkLoadManager(this.conf, asyncClusterConnection);
-    this.secureBulkLoadManager.start();
+    this.secureBulkLoadManager.start(); //在hadoop上创建了/hbase.rootdir/staging目录。
 
     // Health checker thread.
     if (isHealthCheckerConfigured()) {
@@ -1766,7 +1829,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         HConstants.DEFAULT_THREAD_WAKE_FREQUENCY);
       healthCheckChore = new HealthCheckChore(sleepTime, this, getConfiguration());
     }
-    // Executor status collect thread.
+    // Executor status collect thread. 构建执行器的状态手机机制
     if (
       this.conf.getBoolean(HConstants.EXECUTOR_STATUS_COLLECT_ENABLED,
         HConstants.DEFAULT_EXECUTOR_STATUS_COLLECT_ENABLED)
@@ -1777,19 +1840,22 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         this.metricsRegionServer.getMetricsSource());
     }
 
-    this.walRoller = new LogRoller(this);
+    this.walRoller = new LogRoller(this); // 创建LogRoller，定期运行以确定是否滚动WAL。
+    // 创建NoLimitThroughputController
     this.flushThroughputController = FlushThroughputControllerFactory.create(this, conf);
+    // 创建程序结果报告器
     this.procedureResultReporter = new RemoteProcedureResultReporter(this);
 
     // Create the CompactedFileDischarger chore executorService. This chore helps to
     // remove the compacted files that will no longer be used in reads.
     // Default is 2 mins. The default value for TTLCleaner is 5 mins so we set this to
     // 2 mins so that compacted files can be archived before the TTLCleaner runs
+    // 创建CompactedFileDischarger，帮助卸载合并后冗余的文件。
     int cleanerInterval = conf.getInt("hbase.hfile.compaction.discharger.interval", 2 * 60 * 1000);
     this.compactedFileDischarger = new CompactedHFilesDischarger(cleanerInterval, this, this);
     choreService.scheduleChore(compactedFileDischarger);
 
-    // Start executor services
+    // Start executor services 创建不同作用的线程池，并启动
     final int openRegionThreads = conf.getInt("hbase.regionserver.executor.openregion.threads", 3);
     executorService.startExecutorService(executorService.new ExecutorConfig()
       .setExecutorType(ExecutorType.RS_OPEN_REGION).setCorePoolSize(openRegionThreads));
@@ -1932,19 +1998,23 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
 
   private void initializeThreads() {
     // Cache flushing thread.
+    // 创建内存存储缓存刷新器。
     this.cacheFlusher = new MemStoreFlusher(conf, this);
 
     // Compaction thread
+    // 实例化CompactSplit
     this.compactSplitThread = new CompactSplit(this);
 
     // Background thread to check for compactions; needed if region has not gotten updates
     // in a while. It will take care of not checking too frequently on store-by-store basis.
+    // 创建压缩检查ScheduledChore
     this.compactionChecker = new CompactionChecker(this, this.compactionCheckFrequency, this);
+    // 创建定期内存存储刷新器
     this.periodicFlusher = new PeriodicMemStoreFlusher(this.flushCheckFrequency, this);
     this.leaseManager = new LeaseManager(this.threadWakeFrequency);
 
     final boolean isSlowLogTableEnabled = conf.getBoolean(HConstants.SLOW_LOG_SYS_TABLE_ENABLED_KEY,
-      HConstants.DEFAULT_SLOW_LOG_SYS_TABLE_ENABLED_KEY);
+      HConstants.DEFAULT_SLOW_LOG_SYS_TABLE_ENABLED_KEY); // 是否启用慢日志表，如果启用这十分钟刷一次
     if (isSlowLogTableEnabled) {
       // default chore duration: 10 min
       final int duration = conf.getInt("hbase.slowlog.systable.chore.duration", 10 * 60 * 1000);
@@ -1953,10 +2023,11 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
 
     if (this.nonceManager != null) {
       // Create the scheduled chore that cleans up nonces.
+      // 促进调度器清理随机数
       nonceManagerChore = this.nonceManager.createCleanupScheduledChore(this);
     }
 
-    // Setup the Quota Manager
+    // Setup the Quota Manager 创建配额管理器
     rsQuotaManager = new RegionServerRpcQuotaManager(this);
     rsSpaceQuotaManager = new RegionServerSpaceQuotaManager(this);
 
@@ -1975,6 +2046,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       onlyMetaRefresh = true;
     }
     if (storefileRefreshPeriod > 0) {
+      // 创建sotrefile刷新调度器
       this.storefileRefresher =
         new StorefileRefresherChore(storefileRefreshPeriod, onlyMetaRefresh, this, this);
     }
@@ -1991,12 +2063,13 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     double jitterRate =
       (ThreadLocalRandom.current().nextDouble() - 0.5D) * brokenStoreFileCleanerDelayJitter;
     long jitterValue = Math.round(brokenStoreFileCleanerDelay * jitterRate);
+    // 创建损坏的storefile清理器
     this.brokenStoreFileCleaner =
       new BrokenStoreFileCleaner((int) (brokenStoreFileCleanerDelay + jitterValue),
         brokenStoreFileCleanerPeriod, this, conf, this);
-
+    // 创建mobFile清理器
     this.rsMobFileCleanerChore = new RSMobFileCleanerChore(this);
-
+    // 注册配置服务
     registerConfigurationObservers();
   }
 
@@ -2435,7 +2508,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
    */
   @InterfaceAudience.Private
   protected synchronized ServerName createRegionServerStatusStub(boolean refresh) {
-    if (rssStub != null) {
+    if (rssStub != null) { // 第一次肯定是null
       return masterAddressTracker.getMasterAddress();
     }
     ServerName sn = null;
@@ -2444,9 +2517,9 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     LockService.BlockingInterface intLockStub = null;
     boolean interrupted = false;
     try {
-      while (keepLooping()) {
-        sn = this.masterAddressTracker.getMasterAddress(refresh);
-        if (sn == null) {
+      while (keepLooping()) { // 首次为true
+        sn = this.masterAddressTracker.getMasterAddress(refresh); // 获取master节点
+        if (sn == null) { // master节点还没有启动，就进行睡眠等待，一直到master节点启动成功。
           if (!keepLooping()) {
             // give up with no connection.
             LOG.debug("No master found and cluster is stopped; bailing out");
@@ -2462,6 +2535,7 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
           }
           continue;
         }
+         // 当master节点存在，且启动成功，这进行rpc通道建立连接成功后，跳出循环
         try {
           BlockingRpcChannel channel = this.rpcClient.createBlockingRpcChannel(sn,
             userProvider.getCurrent(), shortOperationTimeout);
@@ -2488,8 +2562,8 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
         Thread.currentThread().interrupt();
       }
     }
-    this.rssStub = intRssStub;
-    this.lockStub = intLockStub;
+    this.rssStub = intRssStub; // 赋值连接通道
+    this.lockStub = intLockStub; // 赋值锁服务
     return sn;
   }
 
@@ -2510,8 +2584,9 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
     if (this.masterless) {
       return RegionServerStartupResponse.getDefaultInstance();
     }
+    // 该方法以建立master和regionserver 的rpc 连接通道
     ServerName masterServerName = createRegionServerStatusStub(true);
-    RegionServerStatusService.BlockingInterface rss = rssStub;
+    RegionServerStatusService.BlockingInterface rss = rssStub; // 此时rssStub不为null
     if (masterServerName == null || rss == null) {
       return null;
     }
@@ -2526,7 +2601,8 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       LOG.info("reportForDuty to master=" + masterServerName + " with port="
         + rpcServices.getSocketAddress().getPort() + ", startcode=" + this.startcode);
       long now = EnvironmentEdgeManager.currentTime();
-      int port = rpcServices.getSocketAddress().getPort();
+      int port = rpcServices.getSocketAddress().getPort(); // 获取regionserver 的端口
+      // 建立regionServer的启动连接请求。
       RegionServerStartupRequest.Builder request = RegionServerStartupRequest.newBuilder();
       if (!StringUtils.isBlank(useThisHostnameInstead)) {
         request.setUseThisHostnameInstead(useThisHostnameInstead);
@@ -2534,6 +2610,8 @@ public class HRegionServer extends HBaseServerBase<RSRpcServices>
       request.setPort(port);
       request.setServerStartCode(this.startcode);
       request.setServerCurrentTime(now);
+      // 通过rpc client向master汇报当前regionserver已经启动成功。
+      // 在master 的serverManager中执行regionServerStartup方法，master节点存储当前regionserver的信息。
       result = rss.regionServerStartup(null, request.build());
     } catch (ServiceException se) {
       IOException ioe = ProtobufUtil.getRemoteException(se);

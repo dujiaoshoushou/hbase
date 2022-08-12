@@ -233,11 +233,12 @@ public class ActiveMasterManager extends ZKListener {
       try {
         if (
           MasterAddressTracker.setMasterAddress(this.watcher,
-            this.watcher.getZNodePaths().masterAddressZNode, this.sn, infoPort)
-        ) {
+            this.watcher.getZNodePaths().masterAddressZNode, this.sn, infoPort) // 竞争，实现backupMaster 到 activeMaster
+        ) { // 如果竞选master节点成功，执行如下操作
 
           // If we were a backup master before, delete our ZNode from the backup
           // master directory since we are the active now)
+          // 删除直接去backup master的ZNode路径
           if (ZKUtil.checkExists(this.watcher, backupZNode) != -1) {
             LOG.info("Deleting ZNode for " + backupZNode + " from backup master directory");
             ZKUtil.deleteNodeFailSilent(this.watcher, backupZNode);
@@ -252,7 +253,7 @@ public class ActiveMasterManager extends ZKListener {
           LOG.info("Registered as active master=" + this.sn);
           return true;
         }
-
+        // 如果竞选master节点失败，执行如下操作
         // Invalidate the active master name so that subsequent requests do not get any stale
         // master information. Will be re-fetched if needed.
         activeMasterServerName = null;
@@ -275,7 +276,7 @@ public class ActiveMasterManager extends ZKListener {
             // Hopefully next time around we won't fail the parse. Dangerous.
             continue;
           }
-          if (ServerName.isSameAddress(currentMaster, this.sn)) {
+          if (ServerName.isSameAddress(currentMaster, this.sn)) { // 判断当前master是否和当前相同，如果相同则删除监听器和磁盘文件。
             msg = ("Current master has this master's address, " + currentMaster
               + "; master was restarted? Deleting node.");
             // Hurry along the expiration of the znode.
@@ -296,7 +297,7 @@ public class ActiveMasterManager extends ZKListener {
         master.abort("Received an unexpected KeeperException, aborting", ke);
         return false;
       }
-      synchronized (this.clusterHasActiveMaster) {
+      synchronized (this.clusterHasActiveMaster) { // 阻塞直到再次竞选master
         while (clusterHasActiveMaster.get() && !master.isStopped()) {
           try {
             clusterHasActiveMaster.wait(checkInterval);

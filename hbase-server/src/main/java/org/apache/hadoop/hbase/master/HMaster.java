@@ -496,7 +496,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
       // Disable usage of meta replicas in the master
       this.conf.setBoolean(HConstants.USE_META_REPLICAS, false);
 
-      decorateMasterConfiguration(this.conf);
+      decorateMasterConfiguration(this.conf); // 修饰配置项
 
       // Hack! Maps DFSClient => Master for logs. HDFS made this
       // config param for task trackers, but we can piggyback off of it.
@@ -509,7 +509,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
       // preload table descriptor at startup
       this.preLoadTableDescriptors = conf.getBoolean("hbase.master.preload.tabledescriptors", true);
 
-      this.maxBalancingTime = getMaxBalancingTime();
+      this.maxBalancingTime = getMaxBalancingTime(); // 最大的平衡周期，默认是300000
       this.maxRitPercent = conf.getDouble(HConstants.HBASE_MASTER_BALANCER_MAX_RIT_PERCENT,
         HConstants.DEFAULT_HBASE_MASTER_BALANCER_MAX_RIT_PERCENT);
 
@@ -533,10 +533,10 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
           getChoreService().scheduleChore(clusterStatusPublisherChore);
         }
       }
-      this.activeMasterManager = createActiveMasterManager(zooKeeper, serverName, this);
-      cachedClusterId = new CachedClusterId(this, conf);
-      this.regionServerTracker = new RegionServerTracker(zooKeeper, this);
-      this.rpcServices.start(zooKeeper);
+      this.activeMasterManager = createActiveMasterManager(zooKeeper, serverName, this); // 创建master管理器（存活的master）
+      cachedClusterId = new CachedClusterId(this, conf); // 缓存集群id
+      this.regionServerTracker = new RegionServerTracker(zooKeeper, this); // 创建regionServer跟踪器
+      this.rpcServices.start(zooKeeper); // 启动Hmaster rpcServer服务端，同时创建zk监听器
       span.setStatus(StatusCode.OK);
     } catch (Throwable t) {
       // Make sure we log the exception. HMaster is often started via reflection and the
@@ -574,10 +574,13 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
   public void run() {
     try {
       installShutdownHook();
-      registerConfigurationObservers();
+      registerConfigurationObservers(); // 注册配置观察者
       Threads.setDaemonThreadRunning(new Thread(TraceUtil.tracedRunnable(() -> {
         try {
-          int infoPort = putUpJettyServer();
+          int infoPort = putUpJettyServer(); // 创建JettyServer web服务器，并启动
+          // 启动ActiveMasterManager
+          // 1.执行 active 角色确认
+          // 2.启动成为 active HMaster 之后要启动的基础服务
           startActiveMasterManager(infoPort);
         } catch (Throwable t) {
           // Make sure we log the exception.
@@ -755,15 +758,16 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
       conf.setClass(HConstants.HBASE_MASTER_LOADBALANCER_CLASS, MaintenanceLoadBalancer.class,
         LoadBalancer.class);
     }
+    // 创建banlancer 跟踪器 并启动
     this.balancer = new RSGroupBasedLoadBalancer();
     this.loadBalancerTracker = new LoadBalancerTracker(zooKeeper, this);
     this.loadBalancerTracker.start();
-
+    // 创建正常的region管理器，并启动
     this.regionNormalizerManager =
       RegionNormalizerFactory.createNormalizerManager(conf, zooKeeper, this);
     this.configurationManager.registerObserver(regionNormalizerManager);
     this.regionNormalizerManager.start();
-
+    // 创建切分和合并跟踪器，并启动
     this.splitOrMergeTracker = new SplitOrMergeTracker(zooKeeper, conf, this);
     this.splitOrMergeTracker.start();
 
@@ -920,8 +924,12 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
 
     // always initialize the MemStoreLAB as we use a region to store data in master now, see
     // localStore.
+    // 为了提高内存利用率，降低 Full GC 而采用的一种 本地内存池的 策略： MSLAB 的技术 : 先一口气申请 2M 的内存给你用
+    // 创建
     initializeMemStoreChunkCreator(null);
+    // 实例化master的文件系统，主要包括dataFs walFs rootDir
     this.fileSystemManager = new MasterFileSystem(conf);
+    // 实例化MasterWalManager，日志管理器。
     this.walManager = new MasterWalManager(this);
 
     // warm-up HTDs cache on master initialization
@@ -933,6 +941,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     // Publish cluster ID; set it in Master too. The superclass RegionServer does this later but
     // only after it has checked in with the Master. At least a few tests ask Master for clusterId
     // before it has called its run method and before RegionServer has done the reportForDuty.
+    // HBase 集群启动的时候会存储 clusterID，当 hmaster 成为 active 的时候，会将这个 clusterID 信息写入到 zk 中
     ClusterId clusterId = fileSystemManager.getClusterId();
     status.setStatus("Publishing Cluster ID " + clusterId + " in ZooKeeper");
     ZKClusterId.setClusterId(this.zooKeeper, fileSystemManager.getClusterId());
@@ -957,24 +966,31 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     // The below two managers must be created before loading procedures, as they will be used during
     // loading.
     // initialize master local region
+    // 初始化master local region，存储wal 和 master 元数据
     masterRegion = MasterRegionFactory.create(this);
+    // 实例化MasterRegionServerList，已便重启的时候查找region server列表
     rsListStorage = new MasterRegionServerList(masterRegion, this);
-
+    // 创建region server 管理器，是HMaster维护region server的列表的存储器
     this.serverManager = createServerManager(this, rsListStorage);
+    //
     this.syncReplicationReplayWALManager = new SyncReplicationReplayWALManager(this);
     if (
       !conf.getBoolean(HBASE_SPLIT_WAL_COORDINATED_BY_ZK, DEFAULT_HBASE_SPLIT_COORDINATED_BY_ZK)
     ) {
       this.splitWALManager = new SplitWALManager(this);
     }
-
+    // 尝试将元数据从ZooKeeper持久化到hbase（表）中，即hdfs文件存储。
     tryMigrateMetaLocationsFromZooKeeper();
-
+    // TODO 这个是重点，hbase的状态机
+    // 创建hbase的状态机，监控主要程序执行的状态
     createProcedureExecutor();
     Map<Class<?>, List<Procedure<MasterProcedureEnv>>> procsByType = procedureExecutor
       .getActiveProceduresNoCopy().stream().collect(Collectors.groupingBy(p -> p.getClass()));
 
     // Create Assignment Manager
+    // TODO 这个是重点，创建分配管理器，并启动
+    // AssignmentManager 专门负责 hbase 集群中关于 region 分配和负载均衡的
+    // 如果创建 region，如果分裂region，如果迁移region, 等，都是由 AssignmentManager
     this.assignmentManager = createAssignmentManager(this, masterRegion);
     this.assignmentManager.start();
     // TODO: TRSP can perform as the sub procedure for other procedures, so even if it is marked as
@@ -992,15 +1008,18 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     // it out).
     // We also pass dirs that are already 'splitting'... so we can do some checks down in tracker.
     // TODO: Generate the splitting and live Set in one pass instead of two as we currently do.
+    // 追踪 RS 在线状态的 用来监控 /hbase/rs 节点的 子节点个数变化
     this.regionServerTracker.upgrade(
       procsByType.getOrDefault(ServerCrashProcedure.class, Collections.emptyList()).stream()
         .map(p -> (ServerCrashProcedure) p).map(p -> p.getServerName()).collect(Collectors.toSet()),
       Sets.union(rsListStorage.getAll(), walManager.getLiveServersFromWALDir()),
       walManager.getSplittingServersFromWALDir());
     // This manager must be accessed AFTER hbase:meta is confirmed on line..
+    // 实例化表状态管理器
     this.tableStateManager = new TableStateManager(this);
 
     status.setStatus("Initializing ZK system trackers");
+    // 这个方法的内部，会创建很多的 Tracker， 用来分别追踪不同的 znode 节点
     initializeZKBasedSystemTrackers();
     status.setStatus("Loading last flushed sequence id of regions");
     try {
@@ -1017,7 +1036,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     zombieDetector.setDaemon(true);
     zombieDetector.start();
 
-    if (!maintenanceMode) {
+    if (!maintenanceMode) { // 如果不是安全模式，则初始化hbase的协处理器。
       status.setStatus("Initializing master coprocessors");
       setQuotasObserver(conf);
       initializeCoprocessorHost(conf);
@@ -1032,6 +1051,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     status.setStatus("Initializing meta table if this is a new deploy");
     InitMetaProcedure initMetaProc = null;
     // Print out state of hbase:meta on startup; helps debugging.
+    // 如果hbase meta的元数据表不存在，则通过InitMetaProcedure进行创建。
     if (!this.assignmentManager.getRegionStates().hasTableRegionStates(TableName.META_TABLE_NAME)) {
       Optional<InitMetaProcedure> optProc = procedureExecutor.getProcedures().stream()
         .filter(p -> p instanceof InitMetaProcedure).map(o -> (InitMetaProcedure) o).findAny();
@@ -1044,18 +1064,21 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     }
 
     // initialize load balancer
+    // 初始均衡器
     this.balancer.setMasterServices(this);
     this.balancer.initialize();
     this.balancer.updateClusterMetrics(getClusterMetricsWithoutCoprocessor());
 
     // start up all service threads.
     status.setStatus("Initializing master service threads");
-    startServiceThreads();
+    startServiceThreads(); // 启动所有服务的线程。
     // wait meta to be initialized after we start procedure executor
+    // 等待元数据被初始化（meta表）
     if (initMetaProc != null) {
       initMetaProc.await();
     }
     // Wake up this server to check in
+    // 唤醒所有的服务进行校验
     sleeper.skipSleepCycle();
 
     // Wait for region servers to report in.
@@ -1064,6 +1087,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     String statusStr = "Wait for region servers to report in";
     status.setStatus(statusStr);
     LOG.info(Objects.toString(status));
+    // 等待region servers 上报检查结果
     waitForRegionServers(status);
 
     // Check if master is shutting down because issue initializing regionservers or balancer.
@@ -2377,7 +2401,7 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
 
   private void startActiveMasterManager(int infoPort) throws KeeperException {
     String backupZNode = ZNodePaths.joinZNode(zooKeeper.getZNodePaths().backupMasterAddressesZNode,
-      serverName.toString());
+      serverName.toString()); // 自己先成为backup节点，构造出backupZNode路径
     /*
      * Add a ZNode for ourselves in the backup master directory since we may not become the active
      * master. If so, we want the actual active master to know we are backup masters, so that it
@@ -2386,16 +2410,19 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
      * delete this node for us since it is ephemeral.
      */
     LOG.info("Adding backup master ZNode " + backupZNode);
+    // 先自动成为 standby Master，注册写 对应的 znode 节点
     if (!MasterAddressTracker.setMasterAddress(zooKeeper, backupZNode, serverName, infoPort)) {
       LOG.warn("Failed create of " + backupZNode + " by " + serverName);
     }
     this.activeMasterManager.setInfoPort(infoPort);
     int timeout = conf.getInt(HConstants.ZK_SESSION_TIMEOUT, HConstants.DEFAULT_ZK_SESSION_TIMEOUT);
     // If we're a backup master, stall until a primary to write this address
+    // 如果自己不是 active 配置，则等待别的 active HMaster 启动好了再向下执行
     if (conf.getBoolean(HConstants.MASTER_TYPE_BACKUP, HConstants.DEFAULT_MASTER_TYPE_BACKUP)) {
       LOG.debug("HMaster started in backup mode. Stalling until master znode is written.");
       // This will only be a minute or so while the cluster starts up,
       // so don't worry about setting watches on the parent znode
+      // 当前 backup master 等到有其他的 active HMaster 启动好了之后，才退出这个循环！
       while (!activeMasterManager.hasActiveMaster()) {
         LOG.debug("Waiting for master address and cluster state znode to be written.");
         Threads.sleep(timeout);
@@ -2404,7 +2431,9 @@ public class HMaster extends HBaseServerBase<MasterRpcServices> implements Maste
     MonitoredTask status = TaskMonitor.get().createStatus("Master startup");
     status.setDescription("Master startup");
     try {
+       // 第一个重点：竞选成为 Active Master
       if (activeMasterManager.blockUntilBecomingActiveMaster(timeout, status)) {
+        // 第二个重点：如果竞选成功，则启动 Active Master 应该运行的一系列服务
         finishActiveMasterInitialization(status);
       }
     } catch (Throwable t) {

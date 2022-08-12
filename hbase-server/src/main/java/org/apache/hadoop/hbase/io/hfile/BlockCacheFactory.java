@@ -95,25 +95,30 @@ public final class BlockCacheFactory {
   }
 
   public static BlockCache createBlockCache(Configuration conf) {
-    FirstLevelBlockCache l1Cache = createFirstLevelCache(conf);
+    FirstLevelBlockCache l1Cache = createFirstLevelCache(conf); // 创建l1缓存，cache
     if (l1Cache == null) {
       return null;
     }
     boolean useExternal = conf.getBoolean(EXTERNAL_BLOCKCACHE_KEY, EXTERNAL_BLOCKCACHE_DEFAULT);
     if (useExternal) {
-      BlockCache l2CacheInstance = createExternalBlockcache(conf);
+      BlockCache l2CacheInstance = createExternalBlockcache(conf); // 创建l2缓存，通过外部扩展，默认是MemcachedBlockCache
       return l2CacheInstance == null
         ? l1Cache
-        : new InclusiveCombinedBlockCache(l1Cache, l2CacheInstance);
+        : new InclusiveCombinedBlockCache(l1Cache, l2CacheInstance); // 联合l1和l2缓存，即一级缓存和二级缓存
     } else {
       // otherwise use the bucket cache.
-      BucketCache bucketCache = createBucketCache(conf);
+      BucketCache bucketCache = createBucketCache(conf); // 创建桶缓存
       if (!conf.getBoolean("hbase.bucketcache.combinedcache.enabled", true)) {
         // Non combined mode is off from 2.0
         LOG.warn(
           "From HBase 2.0 onwards only combined mode of LRU cache and bucket cache is available");
       }
-      return bucketCache == null ? l1Cache : new CombinedBlockCache(l1Cache, bucketCache);
+      // CombinedBlockCache，In short, it works by keeping meta blocks — INDEX and BLOOM in
+      // the on-heap LruBlockCache tier — and DATA blocks are kept in the BucketCache tier.
+      /**
+       * TODO : 元数据例如索引和布隆缓存是存放在堆的LruBlockCache里，数据块是缓存在BucketCache里。
+       */
+      return bucketCache == null ? l1Cache : new CombinedBlockCache(l1Cache, bucketCache); // 联合l1缓存和桶缓存
     }
   }
 
@@ -122,8 +127,8 @@ public final class BlockCacheFactory {
     if (cacheSize < 0) {
       return null;
     }
-    String policy = c.get(BLOCKCACHE_POLICY_KEY, BLOCKCACHE_POLICY_DEFAULT);
-    int blockSize = c.getInt(BLOCKCACHE_BLOCKSIZE_KEY, HConstants.DEFAULT_BLOCKSIZE);
+    String policy = c.get(BLOCKCACHE_POLICY_KEY, BLOCKCACHE_POLICY_DEFAULT); // 默认lru 策略
+    int blockSize = c.getInt(BLOCKCACHE_BLOCKSIZE_KEY, HConstants.DEFAULT_BLOCKSIZE); // 默认64kb
     LOG.info("Allocating BlockCache size=" + StringUtils.byteDesc(cacheSize) + ", blockSize="
       + StringUtils.byteDesc(blockSize));
     if (policy.equalsIgnoreCase("LRU")) {

@@ -217,7 +217,7 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
     if (walDirUri != null) {
       CommonFSUtils.setFsDefault(this.conf, walDirUri);
     }
-    // init the WALFs
+    // init the WALFs 初始化walfs文件系统，日志文件系统
     this.walFs = new HFileSystem(this.conf, useHBaseChecksum);
     this.walRootDir = CommonFSUtils.getWALRootDir(this.conf);
     // Set 'fs.defaultFS' to match the filesystem on hbase.rootdir else
@@ -248,8 +248,8 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
       this.userProvider = UserProvider.instantiate(conf);
       this.msgInterval = conf.getInt("hbase.regionserver.msginterval", 3 * 1000);
       this.sleeper = new Sleeper(this.msgInterval, this);
-      this.namedQueueRecorder = createNamedQueueRecord();
-      this.rpcServices = createRpcServices();
+      this.namedQueueRecorder = createNamedQueueRecord(); // 创建命名队列，由LMAX Disruptor技术维护
+      this.rpcServices = createRpcServices(); // 创建rpcServer端，masterRpcServices 和 RSRpcServices
       useThisHostnameInstead = getUseThisHostnameInstead(conf);
       InetSocketAddress addr = rpcServices.getSocketAddress();
       String hostName = StringUtils.isBlank(useThisHostnameInstead)
@@ -267,26 +267,26 @@ public abstract class HBaseServerBase<R extends HBaseRpcServicesBase<?>> extends
       zooKeeper =
         new ZKWatcher(conf, getProcessName() + ":" + addr.getPort(), this, canCreateBaseZNode());
 
-      this.configurationManager = new ConfigurationManager();
+      this.configurationManager = new ConfigurationManager(); // 创建属性配置管理器，实现动态更改配置属性
       setupWindows(conf, configurationManager);
 
-      initializeFileSystem();
+      initializeFileSystem(); // 初始化文件系统，例如hdfs
 
-      this.choreService = new ChoreService(getName(), true);
-      this.executorService = new ExecutorService(getName());
+      this.choreService = new ChoreService(getName(), true); // 创建调度系统服务
+      this.executorService = new ExecutorService(getName()); // 创建执行器服务
 
-      this.metaRegionLocationCache = new MetaRegionLocationCache(zooKeeper);
+      this.metaRegionLocationCache = new MetaRegionLocationCache(zooKeeper); // 从zookeeper中获取region location的地址，缓存到 HMaster 内存中。
 
-      if (clusterMode()) {
+      if (clusterMode()) { // 判断是否是集群模式，默认是true
         if (
           conf.getBoolean(HBASE_SPLIT_WAL_COORDINATED_BY_ZK, DEFAULT_HBASE_SPLIT_COORDINATED_BY_ZK)
         ) {
-          csm = new ZkCoordinatedStateManager(this);
+          csm = new ZkCoordinatedStateManager(this); // 创建zookeeper协调状态管理器
         } else {
           csm = null;
         }
-        clusterStatusTracker = new ClusterStatusTracker(zooKeeper, this);
-        clusterStatusTracker.start();
+        clusterStatusTracker = new ClusterStatusTracker(zooKeeper, this); // 创建集群状态跟踪器，通过zk监听器实现
+        clusterStatusTracker.start(); // 启动监听，主要是加载HMaster的备份节点
       } else {
         csm = null;
         clusterStatusTracker = null;

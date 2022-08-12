@@ -187,7 +187,7 @@ public class RSGroupBasedLoadBalancer implements LoadBalancer {
     try {
       Map<ServerName, List<RegionInfo>> assignments = new TreeMap<>();
       List<Pair<List<RegionInfo>, List<ServerName>>> pairs =
-        generateGroupAssignments(Lists.newArrayList(regions.keySet()), servers);
+        generateGroupAssignments(Lists.newArrayList(regions.keySet()), servers); // 初始化分配小组，默认值是default组
       for (Pair<List<RegionInfo>, List<ServerName>> pair : pairs) {
         List<RegionInfo> regionList = pair.getFirst();
         Map<RegionInfo, ServerName> currentAssignmentMap = Maps.newTreeMap();

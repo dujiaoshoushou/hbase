@@ -110,7 +110,7 @@ public class CompactSplit implements CompactionRequester, PropagatingConfigurati
     createCompactionExecutors();
     createSplitExcecutors();
 
-    // compaction throughput controller
+    // compaction throughput controller 创建合并吞吐量管理器。
     this.compactionThroughputController =
       CompactionThroughputControllerFactory.create(server, conf);
   }
@@ -124,35 +124,41 @@ public class CompactSplit implements CompactionRequester, PropagatingConfigurati
     createSplitExcecutors();
   }
 
+  /**
+   * 创建拆分线程池
+   */
   private void createSplitExcecutors() {
     final String n = Thread.currentThread().getName();
-    int splitThreads = conf.getInt(SPLIT_THREADS, SPLIT_THREADS_DEFAULT);
+    int splitThreads = conf.getInt(SPLIT_THREADS, SPLIT_THREADS_DEFAULT); // 拆分线程，默认是1
     this.splits = (ThreadPoolExecutor) Executors.newFixedThreadPool(splitThreads,
       new ThreadFactoryBuilder().setNameFormat(n + "-splits-%d").setDaemon(true).build());
   }
 
+  /**
+   * 创建合并线程池，两个线程池，走不同的队列。
+   */
   private void createCompactionExecutors() {
     this.regionSplitLimit =
       conf.getInt(REGION_SERVER_REGION_SPLIT_LIMIT, DEFAULT_REGION_SERVER_REGION_SPLIT_LIMIT);
 
     int largeThreads =
-      Math.max(1, conf.getInt(LARGE_COMPACTION_THREADS, LARGE_COMPACTION_THREADS_DEFAULT));
-    int smallThreads = conf.getInt(SMALL_COMPACTION_THREADS, SMALL_COMPACTION_THREADS_DEFAULT);
+      Math.max(1, conf.getInt(LARGE_COMPACTION_THREADS, LARGE_COMPACTION_THREADS_DEFAULT)); // 最大合并线程，默认1
+    int smallThreads = conf.getInt(SMALL_COMPACTION_THREADS, SMALL_COMPACTION_THREADS_DEFAULT); // 最小合并线程，默认1
 
     // if we have throttle threads, make sure the user also specified size
     Preconditions.checkArgument(largeThreads > 0 && smallThreads > 0);
 
     final String n = Thread.currentThread().getName();
 
-    StealJobQueue<Runnable> stealJobQueue = new StealJobQueue<Runnable>(COMPARATOR);
+    StealJobQueue<Runnable> stealJobQueue = new StealJobQueue<Runnable>(COMPARATOR); // 创建任务job队列，是优先级的blockQueue
     this.longCompactions = new ThreadPoolExecutor(largeThreads, largeThreads, 60, TimeUnit.SECONDS,
       stealJobQueue,
-      new ThreadFactoryBuilder().setNameFormat(n + "-longCompactions-%d").setDaemon(true).build());
+      new ThreadFactoryBuilder().setNameFormat(n + "-longCompactions-%d").setDaemon(true).build()); // 使用的StealJobQueue
     this.longCompactions.setRejectedExecutionHandler(new Rejection());
     this.longCompactions.prestartAllCoreThreads();
     this.shortCompactions = new ThreadPoolExecutor(smallThreads, smallThreads, 60, TimeUnit.SECONDS,
       stealJobQueue.getStealFromQueue(),
-      new ThreadFactoryBuilder().setNameFormat(n + "-shortCompactions-%d").setDaemon(true).build());
+      new ThreadFactoryBuilder().setNameFormat(n + "-shortCompactions-%d").setDaemon(true).build()); // 使用的是stealJobQueue.getStealFromQueue()
     this.shortCompactions.setRejectedExecutionHandler(new Rejection());
   }
 
@@ -330,7 +336,7 @@ public class CompactSplit implements CompactionRequester, PropagatingConfigurati
     }
   }
 
-  // set protected for test
+  // set protected for test 合并当前region的HStore文件
   protected void requestCompactionInternal(HRegion region, HStore store, String why, int priority,
     boolean selectNow, CompactionLifeCycleTracker tracker,
     CompactionCompleteTracker completeTracker, User user) throws IOException {

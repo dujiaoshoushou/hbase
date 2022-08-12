@@ -114,19 +114,19 @@ public final class MasterRegionFactory {
     Configuration conf = server.getConfiguration();
     MasterRegionParams params = new MasterRegionParams().server(server)
       .regionDirName(MASTER_STORE_DIR).tableDescriptor(withTrackerConfigs(conf));
-    long flushSize = conf.getLong(FLUSH_SIZE_KEY, DEFAULT_FLUSH_SIZE);
+    long flushSize = conf.getLong(FLUSH_SIZE_KEY, DEFAULT_FLUSH_SIZE); // 默认128mb刷新
     long flushPerChanges = conf.getLong(FLUSH_PER_CHANGES_KEY, DEFAULT_FLUSH_PER_CHANGES);
-    long flushIntervalMs = conf.getLong(FLUSH_INTERVAL_MS_KEY, DEFAULT_FLUSH_INTERVAL_MS);
-    int compactMin = conf.getInt(COMPACT_MIN_KEY, DEFAULT_COMPACT_MIN);
+    long flushIntervalMs = conf.getLong(FLUSH_INTERVAL_MS_KEY, DEFAULT_FLUSH_INTERVAL_MS); // 15分钟刷新一次
+    int compactMin = conf.getInt(COMPACT_MIN_KEY, DEFAULT_COMPACT_MIN); // master region compact 最小默认值是4个
     params.flushSize(flushSize).flushPerChanges(flushPerChanges).flushIntervalMs(flushIntervalMs)
       .compactMin(compactMin);
-    int maxWals = conf.getInt(MAX_WALS_KEY, DEFAULT_MAX_WALS);
+    int maxWals = conf.getInt(MAX_WALS_KEY, DEFAULT_MAX_WALS); // 默认 10
     params.maxWals(maxWals);
     if (conf.get(USE_HSYNC_KEY) != null) {
       params.useHsync(conf.getBoolean(USE_HSYNC_KEY, false));
     }
-    params.ringBufferSlotCount(conf.getInt(RING_BUFFER_SLOT_COUNT, DEFAULT_RING_BUFFER_SLOT_COUNT));
-    long rollPeriodMs = conf.getLong(ROLL_PERIOD_MS_KEY, DEFAULT_ROLL_PERIOD_MS);
+    params.ringBufferSlotCount(conf.getInt(RING_BUFFER_SLOT_COUNT, DEFAULT_RING_BUFFER_SLOT_COUNT)); // 环形插槽是128个
+    long rollPeriodMs = conf.getLong(ROLL_PERIOD_MS_KEY, DEFAULT_ROLL_PERIOD_MS); // 15分钟滚动一次
     params.rollPeriodMs(rollPeriodMs).archivedWalSuffix(ARCHIVED_WAL_SUFFIX)
       .archivedHFileSuffix(ARCHIVED_HFILE_SUFFIX);
     return MasterRegion.create(params);

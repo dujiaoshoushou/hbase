@@ -274,11 +274,13 @@ public class AssignmentManager {
     LOG.trace("Starting assignment manager");
 
     // Start the Assignment Thread
+    // 启动分配线程，主要通过while循环处理pendingAssignQueue（ArrayList<RegionStateNode>）队列，来分配
     startAssignmentThread();
     // load meta region states.
     // here we are still in the early steps of active master startup. There is only one thread(us)
     // can access AssignmentManager and create region node, so here we do not need to lock the
     // region node.
+    // 通过自循环，加载元数据中的region 状态。
     try (ResultScanner scanner =
       masterRegion.getScanner(new Scan().addFamily(HConstants.CATALOG_FAMILY))) {
       for (;;) {
@@ -306,7 +308,7 @@ public class AssignmentManager {
           }, result);
       }
     }
-    mirrorMetaLocations();
+    mirrorMetaLocations(); // 通过zk监控元数据
   }
 
   /**
@@ -2287,14 +2289,14 @@ public class AssignmentManager {
       LOG.trace("Available servers count=" + servers.size() + ": " + servers);
     }
 
-    final LoadBalancer balancer = getBalancer();
+    final LoadBalancer balancer = getBalancer(); // GroupBasedLoadBalancer
     // ask the balancer where to place regions
     if (retainMap != null && !retainMap.isEmpty()) {
       if (isTraceEnabled) {
         LOG.trace("retain assign regions=" + retainMap);
       }
       try {
-        acceptPlan(regions, balancer.retainAssignment(retainMap, servers));
+        acceptPlan(regions, balancer.retainAssignment(retainMap, servers)); // 随机分配
       } catch (IOException e) {
         LOG.warn("unable to retain assignment", e);
         addToPendingAssignment(regions, retainMap.keySet());
@@ -2309,7 +2311,7 @@ public class AssignmentManager {
         LOG.trace("round robin regions=" + hris);
       }
       try {
-        acceptPlan(regions, balancer.roundRobinAssignment(hris, servers));
+        acceptPlan(regions, balancer.roundRobinAssignment(hris, servers)); // 根据servers轮询分配
       } catch (IOException e) {
         LOG.warn("unable to round-robin assignment", e);
         addToPendingAssignment(regions, hris);
